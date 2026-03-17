@@ -1,616 +1,341 @@
-import { extension_settings, getContext } from '../../../extensions.js';
-import { saveSettingsDebounced, eventSource, event_types } from '../../../../script.js';
+import { extension_settings, getContext } from "../../../extensions.js";
+import { eventSource, event_types } from "../../../../script.js";
+import { updateMessageBlock } from "../../../../chat.js";
 
-const EXT_NAME = 'antiSlop';
-const SETTINGS_DEFAULT = {
-    enabled: true,
-    embedUrl: 'http://127.0.0.1:11434/api/embeddings',
+// Глобальные переменные
+let slopDb = {};
+let dbEmbeddings = []; // Кэш векторов базы: [{ phrase, cluster, vector }]
+let panelElement = null;
+let historyListElement = null;
+
+// Настройки по умолчанию
+const defaultSettings = {
+    // Настройки для векторного поиска (Embeddings)
+    embedApiUrl: 'http://127.0.0.1:11434/v1/embeddings',
     embedModel: 'nomic-embed-text',
-    embedKey: '',
-    rewriteUrl: 'http://127.0.0.1:11434/v1/chat/completions',
-    rewriteModel: 'llama3',
-    rewriteKey: '',
-    threshold: 0.82,
-    mode: 'rewrite',
-    fab_x: -1,
-    fab_y: -1,
-    cachedClusters: {},
-    rewriteHistory: []
+    
+    // Настройки для переписывания (LLM Chat Completions)
+    rewriteApiUrl: 'http://127.0.0.1:11434/v1/chat/completions',
+    rewriteModel: 'llama3', // Замените на вашу модель (например, gpt-4o-mini, llama-3.1-8b и т.д.)
+    
+    apiKey: 'sk-1234', // Общий ключ (для локалок не важен, для OpenAI обязателен)
+    threshold: 0.82 // Порог чувствительности (0.82 = 82% сходства)
 };
 
-let settings = {};
+// Загружаем настройки из ST
+let settings = Object.assign({}, defaultSettings, extension_settings.antiSlop || {});
 
-const ICONS = {
-    pencil: `<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-        <defs>
-            <linearGradient id="slop-pencil-grad" x1="0%" y1="0%" x2="100%" y2="100%">
-                <stop offset="0%" style="stop-color:#d4a8ff"/>
-                <stop offset="100%" style="stop-color:#8b5cf6"/>
-            </linearGradient>
-        </defs>
-        <path d="M4 20h4L18.5 9.5a2.121 2.121 0 0 0-3-3L4 17v3z"
-              stroke="url(#slop-pencil-grad)" stroke-width="1.8"
-              stroke-linecap="round" stroke-linejoin="round" fill="none"/>
-        <path d="m13.5 6.5 3 3" stroke="url(#slop-pencil-grad)"
-              stroke-width="1.8" stroke-linecap="round"/>
-        <path d="M4 20h4" stroke="url(#slop-pencil-grad)"
-              stroke-width="1.8" stroke-linecap="round"/>
-        <circle cx="19.5" cy="4.5" r="1.5" fill="#d4a8ff" opacity="0.6"/>
-    </svg>`,
+// ==========================================
+// МАТЕМАТИКА И API ЗАПРОСЫ
+// ==========================================
 
-    pencilActive: `<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-        <defs>
-            <linearGradient id="slop-pencil-active" x1="0%" y1="0%" x2="100%" y2="100%">
-                <stop offset="0%" style="stop-color:#f0d0ff"/>
-                <stop offset="100%" style="stop-color:#b07df9"/>
-            </linearGradient>
-        </defs>
-        <path d="M4 20h4L18.5 9.5a2.121 2.121 0 0 0-3-3L4 17v3z"
-              stroke="url(#slop-pencil-active)" stroke-width="1.8"
-              stroke-linecap="round" stroke-linejoin="round"
-              fill="rgba(176,125,249,0.12)"/>
-        <path d="m13.5 6.5 3 3" stroke="url(#slop-pencil-active)"
-              stroke-width="1.8" stroke-linecap="round"/>
-        <path d="M4 20h4" stroke="url(#slop-pencil-active)"
-              stroke-width="1.8" stroke-linecap="round"/>
-        <circle cx="19.5" cy="4.5" r="1.5" fill="#f0d0ff" opacity="0.9"/>
-    </svg>`,
-
-    pencilMini: `<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="width:12px;height:12px;display:inline-block;vertical-align:middle;margin-bottom:1px;">
-        <path d="M4 20h4L18.5 9.5a2.121 2.121 0 0 0-3-3L4 17v3z"
-              stroke="#b07df9" stroke-width="2"
-              stroke-linecap="round" stroke-linejoin="round" fill="rgba(176,125,249,0.15)"/>
-        <path d="m13.5 6.5 3 3" stroke="#b07df9" stroke-width="2" stroke-linecap="round"/>
-    </svg>`,
-
-    close: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-        <path d="M18 6L6 18M6 6l12 12"/>
-    </svg>`,
-
-    spark: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M12 2l2.4 7.4H22l-6.2 4.5 2.4 7.4L12 17l-6.2 4.3 2.4-7.4L2 9.4h7.6z" fill="rgba(176,125,249,0.15)"/>
-    </svg>`,
-
-    check: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="width:11px;height:11px;flex-shrink:0;"><path d="M20 6L9 17l-5-5"/></svg>`,
-
-    historyIcon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="width:12px;height:12px;"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>`,
-};
-
-async function init() {
-    if (!extension_settings[EXT_NAME]) {
-        extension_settings[EXT_NAME] = { ...SETTINGS_DEFAULT };
+// Косинусное сходство (от 0 до 1)
+function cosineSimilarity(vecA, vecB) {
+    let dotProduct = 0, normA = 0, normB = 0;
+    for (let i = 0; i < vecA.length; i++) {
+        dotProduct += vecA[i] * vecB[i];
+        normA += vecA[i] ** 2;
+        normB += vecB[i] ** 2;
     }
-    for (const [key, val] of Object.entries(SETTINGS_DEFAULT)) {
-        if (extension_settings[EXT_NAME][key] === undefined) {
-            extension_settings[EXT_NAME][key] = val;
-        }
-    }
-    settings = extension_settings[EXT_NAME];
-    setupUI();
-
-    console.log('[Anti-Slop] init: event_types available =', typeof event_types, event_types?.MESSAGE_RECEIVED);
-    console.log('[Anti-Slop] init: eventSource available =', typeof eventSource);
-
-    // Слушаем оба возможных события — в разных версиях ST они называются по-разному
-    eventSource.on(event_types.MESSAGE_RECEIVED, handleNewMessage);
-    eventSource.on(event_types.CHARACTER_MESSAGE_RENDERED, handleNewMessage);
-
-    console.log('[Anti-Slop] Обработчики событий зарегистрированы.');
-    await loadSlopDatabase();
+    if (normA === 0 || normB === 0) return 0;
+    return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
 }
 
-async function handleNewMessage(messageId) {
-    console.log('[Anti-Slop] handleNewMessage вызван, messageId =', messageId, '| enabled =', settings.enabled);
+// Запрос векторов (Embeddings)
+async function fetchEmbeddings(texts) {
+    try {
+        const response = await fetch(settings.embedApiUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${settings.apiKey}` },
+            body: JSON.stringify({ input: texts, model: settings.embedModel })
+        });
+        if (!response.ok) throw new Error(`Embed API Error: ${response.status}`);
+        const data = await response.json();
+        return data.data.sort((a, b) => a.index - b.index).map(item => item.embedding);
+    } catch (error) {
+        console.error("[Anti-Slop] Ошибка Embeddings:", error);
+        return null;
+    }
+}
 
-    if (!settings.enabled) { console.log('[Anti-Slop] Отключён, выходим.'); return; }
+// Нейросетевое переписывание предложения (LLM)
+async function rewriteSentence(originalSentence, slopPhrase) {
+    const systemPrompt = "You are an expert fiction editor. Your task is to rewrite the provided sentence to remove the common cliché. Make it sound natural, descriptive, and fitting for a roleplay context. DO NOT use the phrase provided in the cliché. Output ONLY the rewritten sentence. No quotes, no explanations, no notes.";
+    const userPrompt = `Cliché to avoid: "${slopPhrase}"\n\nOriginal sentence: ${originalSentence}\n\nRewritten sentence:`;
+
+    try {
+        const response = await fetch(settings.rewriteApiUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${settings.apiKey}` },
+            body: JSON.stringify({
+                model: settings.rewriteModel,
+                messages: [
+                    { role: "system", content: systemPrompt },
+                    { role: "user", content: userPrompt }
+                ],
+                temperature: 0.7,
+                max_tokens: 150
+            })
+        });
+
+        if (!response.ok) throw new Error(`Rewrite API Error: ${response.status}`);
+        const data = await response.json();
+        
+        // Очищаем ответ от лишних кавычек и пробелов
+        let rewritten = data.choices[0].message.content.trim();
+        rewritten = rewritten.replace(/^["']|["']$/g, '').trim(); 
+        
+        return rewritten;
+    } catch (error) {
+        console.error("[Anti-Slop] Ошибка LLM переписывания:", error);
+        return originalSentence; // В случае ошибки возвращаем оригинал
+    }
+}
+
+// Загрузка и кэширование базы
+async function initDatabaseAndCacheEmbeddings() {
+    try {
+        const response = await fetch('./scripts/extensions/anti-slop/slop_db.json');
+        if (!response.ok) throw new Error("Не удалось загрузить slop_db.json");
+        
+        const data = await response.json();
+        slopDb = data.clusters || {};
+        
+        const allPhrases = [];
+        for (const [cluster, phrases] of Object.entries(slopDb)) {
+            for (const phrase of phrases) allPhrases.push({ phrase, cluster });
+        }
+
+        const textsToEmbed = allPhrases.map(item => item.phrase);
+        const vectors = await fetchEmbeddings(textsToEmbed);
+        
+        if (vectors && vectors.length === allPhrases.length) {
+            dbEmbeddings = allPhrases.map((item, i) => ({
+                phrase: item.phrase,
+                cluster: item.cluster,
+                vector: vectors[i]
+            }));
+            document.getElementById('slop-api-status').innerText = "✅ DB Cached";
+            document.getElementById('slop-api-status').className = "slop-check-status slop-check-ok";
+        } else {
+            throw new Error("Несовпадение векторов");
+        }
+    } catch (error) {
+        console.error("[Anti-Slop] Ошибка инициализации:", error);
+        document.getElementById('slop-api-status').innerText = "❌ API Error";
+        document.getElementById('slop-api-status').className = "slop-check-status slop-check-err";
+    }
+}
+
+// ==========================================
+// ИНТЕРФЕЙС
+// ==========================================
+
+function createUI() {
+    const fab = document.createElement('button');
+    fab.id = 'anti-slop-fab';
+    fab.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"></path><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path></svg>`;
+    document.body.appendChild(fab);
+
+    panelElement = document.createElement('div');
+    panelElement.id = 'anti-slop-panel';
+    panelElement.innerHTML = `
+        <div class="slop-header">
+            <div class="slop-header-left">
+                <div class="slop-header-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"></path><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path></svg></div>
+                <div class="slop-header-title">
+                    <span class="slop-title-main">Anti-Slop Engine</span>
+                    <span class="slop-title-sub">AI Rewrite Active</span>
+                </div>
+            </div>
+            <div class="slop-header-right">
+                <button class="slop-close-btn" id="anti-slop-close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></button>
+            </div>
+        </div>
+        <div class="slop-body">
+            <div class="slop-section">
+                <div class="slop-section-label">Detection Settings (Embeddings)</div>
+                <div class="slop-setting-group">
+                    <label>Embed API URL</label>
+                    <input type="text" id="slop-embed-url" class="slop-input" value="${settings.embedApiUrl}">
+                </div>
+                <div class="slop-setting-group">
+                    <label>Embed Model</label>
+                    <input type="text" id="slop-embed-model" class="slop-input" value="${settings.embedModel}">
+                </div>
+                <div class="slop-setting-group">
+                    <label>Threshold: <span id="slop-threshold-val">${settings.threshold}</span></label>
+                    <input type="range" id="slop-threshold" min="0.5" max="0.99" step="0.01" value="${settings.threshold}">
+                </div>
+            </div>
+
+            <div class="slop-section">
+                <div class="slop-section-label">Rewrite Settings (LLM)</div>
+                <div class="slop-setting-group">
+                    <label>Chat API URL</label>
+                    <input type="text" id="slop-rewrite-url" class="slop-input" value="${settings.rewriteApiUrl}">
+                </div>
+                <div class="slop-setting-group">
+                    <label>Chat Model Name</label>
+                    <input type="text" id="slop-rewrite-model" class="slop-input" value="${settings.rewriteModel}">
+                </div>
+                <div class="slop-setting-group">
+                    <label>API Key (Optional for Local)</label>
+                    <input type="password" id="slop-api-key" class="slop-input" value="${settings.apiKey}">
+                </div>
+                <div class="slop-check-row">
+                    <button class="slop-check-btn" id="slop-reconnect-btn">Save & Cache DB</button>
+                    <span id="slop-api-status" class="slop-check-status slop-check-pending">Waiting...</span>
+                </div>
+            </div>
+
+            <div class="slop-section">
+                <div class="slop-section-label slop-section-label-row">
+                    <span>Recent Fixes</span>
+                    <button class="slop-clear-history-btn" id="anti-slop-clear-history">CLEAR</button>
+                </div>
+                <div id="slop-history-list">
+                    <div class="slop-history-empty">No slop detected yet.</div>
+                </div>
+            </div>
+        </div>
+    `;
+    document.body.appendChild(panelElement);
+
+    historyListElement = document.getElementById('slop-history-list');
+
+    fab.addEventListener('click', () => { panelElement.classList.toggle('visible'); fab.classList.toggle('active'); });
+    document.getElementById('anti-slop-close').addEventListener('click', () => { panelElement.classList.remove('visible'); fab.classList.remove('active'); });
+    document.getElementById('anti-slop-clear-history').addEventListener('click', () => historyListElement.innerHTML = '<div class="slop-history-empty">No slop detected yet.</div>');
+
+    document.getElementById('slop-threshold').addEventListener('input', (e) => {
+        const val = parseFloat(e.target.value);
+        document.getElementById('slop-threshold-val').innerText = val;
+        settings.threshold = val;
+        saveSettings();
+    });
+
+    document.getElementById('slop-reconnect-btn').addEventListener('click', async () => {
+        settings.embedApiUrl = document.getElementById('slop-embed-url').value;
+        settings.embedModel = document.getElementById('slop-embed-model').value;
+        settings.rewriteApiUrl = document.getElementById('slop-rewrite-url').value;
+        settings.rewriteModel = document.getElementById('slop-rewrite-model').value;
+        settings.apiKey = document.getElementById('slop-api-key').value;
+        saveSettings();
+        
+        document.getElementById('slop-api-status').innerText = "⏳ Processing...";
+        document.getElementById('slop-api-status').className = "slop-check-status slop-check-pending";
+        await initDatabaseAndCacheEmbeddings();
+    });
+}
+
+function saveSettings() {
+    extension_settings.antiSlop = settings;
+    getContext().saveSettings(); 
+}
+
+function addHistoryItem(original, rewritten, similarity, cluster) {
+    const emptyMsg = historyListElement.querySelector('.slop-history-empty');
+    if (emptyMsg) emptyMsg.remove();
+
+    const item = document.createElement('div');
+    item.className = 'slop-history-item';
+    const time = new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' });
+
+    item.innerHTML = `
+        <div class="slop-history-meta">@ ${time} | CLUSTER: ${cluster.toUpperCase()} | SIM: ${Math.round(similarity * 100)}%</div>
+        <div class="slop-history-original">"${original}"</div>
+        <div class="slop-history-arrow">▼ LLM rewrote to ▼</div>
+        <div class="slop-history-rewritten">"${rewritten}"</div>
+    `;
+    historyListElement.prepend(item);
+}
+
+// ==========================================
+// ГЛАВНЫЙ ОБРАБОТЧИК СООБЩЕНИЙ
+// ==========================================
+
+async function processIncomingMessage(mesId) {
+    if (dbEmbeddings.length === 0) return;
 
     const context = getContext();
     const chat = context.chat;
+    const message = chat[mesId];
 
-    // Иногда ST передаёт объект или undefined — берём последнее сообщение как fallback
-    let idx = (typeof messageId === 'number') ? messageId : chat.length - 1;
-    const msg = chat[idx];
+    if (!message || message.is_user || !message.mes) return;
 
-    console.log('[Anti-Slop] idx =', idx, '| chat.length =', chat.length, '| msg =', msg ? '[ok]' : '[undefined]');
+    const originalText = message.mes;
+    let modifiedText = originalText;
+    let slopFound = false;
 
-    if (!msg) { console.warn('[Anti-Slop] msg undefined, выходим.'); return; }
-    if (msg.is_user || msg.is_system) { console.log('[Anti-Slop] Сообщение от юзера/системы, пропускаем.'); return; }
+    // Разбиваем на предложения
+    const sentences = originalText.match(/[^.!?]+[.!?]+/g) || [originalText];
+    const cleanSentences = sentences.map(s => s.trim()).filter(s => s.length > 5);
+    
+    if (cleanSentences.length === 0) return;
 
-    const originalText = msg.mes;
-    console.log('[Anti-Slop] originalText длина =', originalText?.length, '| clusters =', Object.keys(settings.cachedClusters).length);
+    const fab = document.getElementById('anti-slop-fab');
+    fab.classList.add('processing'); // Крутим иконку пока думает API
 
-    if (!originalText) return;
-
-    // Если кластеры ещё не загружены — пробуем загрузить
-    if (Object.keys(settings.cachedClusters).length === 0) {
-        console.warn('[Anti-Slop] Кластеры пусты! Запускаем loadSlopDatabase...');
-        await loadSlopDatabase();
-    }
-
-    setFabState('processing');
-    try {
-        const cleanedText = await processText(originalText);
-        console.log('[Anti-Slop] processText завершён. Изменён:', cleanedText !== originalText);
-        if (cleanedText !== originalText) {
-            chat[idx].mes = cleanedText +
-                ` <span class="anti-slop-edited-icon" title="Anti-Slop очистил клише">${ICONS.pencilMini}</span>`;
-            context.saveChat();
-            const messageElement = document.querySelector(`.mes[mesid="${idx}"] .mes_text`);
-            if (messageElement) {
-                const converter = new showdown.Converter();
-                messageElement.innerHTML = converter.makeHtml(chat[idx].mes);
-            }
-        }
-    } catch (error) {
-        console.error("[Anti-Slop] Ошибка при обработке сообщения:", error);
-    } finally {
-        setFabState('idle');
-    }
-}
-
-async function processText(text) {
-    const segmenter = new Intl.Segmenter('en', { granularity: 'sentence' });
-    const segments = Array.from(segmenter.segment(text));
-    let resultText = "";
-    let modified = false;
-
-    for (const segment of segments) {
-        let sentence = segment.segment;
-        const pureSentence = sentence.trim();
-        if (pureSentence.length < 10) { resultText += sentence; continue; }
-
-        const sentenceVec = await fetchEmbedding(pureSentence);
-        if (!sentenceVec) { resultText += sentence; continue; }
-
-        let highestSim = 0, matchedCluster = null;
-        for (const [clusterName, clusterVec] of Object.entries(settings.cachedClusters)) {
-            const sim = cosineSimilarity(sentenceVec, clusterVec);
-            if (sim > highestSim) { highestSim = sim; matchedCluster = clusterName; }
-        }
-
-        if (highestSim >= parseFloat(settings.threshold)) {
-            console.log(`[Anti-Slop] Клише (${highestSim.toFixed(2)} ~ ${matchedCluster}): "${pureSentence}"`);
-            if (settings.mode === 'delete') {
-                addToHistory(pureSentence, '[удалено]');
-                modified = true; continue;
-            } else {
-                const rewritten = await rewriteSentence(pureSentence);
-                if (rewritten) {
-                    const leadingSpace = sentence.match(/^\s*/)[0];
-                    const trailingSpace = sentence.match(/\s*$/)[0];
-                    resultText += leadingSpace + rewritten + trailingSpace;
-                    addToHistory(pureSentence, rewritten);
-                    modified = true; continue;
-                }
-            }
-        }
-        resultText += sentence;
-    }
-    return modified ? resultText : text;
-}
-
-function addToHistory(original, rewritten) {
-    if (!Array.isArray(settings.rewriteHistory)) settings.rewriteHistory = [];
-    settings.rewriteHistory.unshift({
-        original,
-        rewritten,
-        time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-    });
-    if (settings.rewriteHistory.length > 5) settings.rewriteHistory.length = 5;
-    saveSettings();
-    renderHistory();
-}
-
-function renderHistory() {
-    const container = document.getElementById('slop-history-list');
-    if (!container) return;
-    const history = settings.rewriteHistory || [];
-    if (history.length === 0) {
-        container.innerHTML = '<div class="slop-history-empty">Исправлений ещё не было</div>';
+    // Получаем векторы
+    const sentenceVectors = await fetchEmbeddings(cleanSentences);
+    if (!sentenceVectors) {
+        fab.classList.remove('processing');
         return;
     }
-    container.innerHTML = history.map((item, i) => `
-        <div class="slop-history-item">
-            <div class="slop-history-meta">#${i + 1} &middot; ${item.time}</div>
-            <div class="slop-history-original">${escapeHtml(item.original)}</div>
-            <div class="slop-history-arrow">&#8595;</div>
-            <div class="slop-history-rewritten">${escapeHtml(item.rewritten)}</div>
-        </div>
-    `).join('');
-}
 
-function escapeHtml(str) {
-    return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-}
+    // Проверяем каждое предложение
+    for (let i = 0; i < cleanSentences.length; i++) {
+        const sVector = sentenceVectors[i];
+        const sentenceText = cleanSentences[i];
+        
+        let highestSim = 0;
+        let matchedSlop = null;
 
-async function fetchEmbedding(text) {
-    try {
-        const isOllama = settings.embedUrl.includes('11434');
-        const payload = isOllama
-            ? { model: settings.embedModel, prompt: text }
-            : { model: settings.embedModel, input: text };
-        const headers = { 'Content-Type': 'application/json' };
-        if (settings.embedKey) headers['Authorization'] = `Bearer ${settings.embedKey}`;
-        const res = await fetch(settings.embedUrl, { method: 'POST', headers, body: JSON.stringify(payload) });
-        if (!res.ok) throw new Error(`Embedding HTTP ${res.status}`);
-        const data = await res.json();
-        return isOllama ? data.embedding : data.data[0].embedding;
-    } catch (e) {
-        console.error("[Anti-Slop] Ошибка Embedding API:", e);
-        return null;
-    }
-}
-
-async function checkEmbedConnection() {
-    const btn = document.getElementById('slop-embed-check-btn');
-    const status = document.getElementById('slop-embed-check-status');
-    btn.disabled = true;
-    status.textContent = '…';
-    status.className = 'slop-check-status slop-check-pending';
-    try {
-        const isOllama = settings.embedUrl.includes('11434');
-        const payload = isOllama
-            ? { model: settings.embedModel, prompt: 'test' }
-            : { model: settings.embedModel, input: 'test' };
-        const headers = { 'Content-Type': 'application/json' };
-        if (settings.embedKey) headers['Authorization'] = `Bearer ${settings.embedKey}`;
-        const res = await fetch(settings.embedUrl, {
-            method: 'POST', headers, body: JSON.stringify(payload),
-            signal: AbortSignal.timeout(8000)
-        });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const data = await res.json();
-        const vec = isOllama ? data.embedding : data.data?.[0]?.embedding;
-        if (!vec || !Array.isArray(vec)) throw new Error('Bad response format');
-        status.textContent = `OK · dim ${vec.length}`;
-        status.className = 'slop-check-status slop-check-ok';
-    } catch (e) {
-        const msg = e.message || 'Error';
-        status.textContent = msg.length > 30 ? msg.slice(0, 30) + '…' : msg;
-        status.className = 'slop-check-status slop-check-err';
-    } finally {
-        btn.disabled = false;
-    }
-}
-
-async function checkRewriteConnection() {
-    const btn = document.getElementById('slop-rewrite-check-btn');
-    const status = document.getElementById('slop-rewrite-check-status');
-    btn.disabled = true;
-    status.textContent = '…';
-    status.className = 'slop-check-status slop-check-pending';
-    try {
-        const headers = { 'Content-Type': 'application/json' };
-        if (settings.rewriteKey) headers['Authorization'] = `Bearer ${settings.rewriteKey}`;
-        const res = await fetch(settings.rewriteUrl, {
-            method: 'POST', headers,
-            body: JSON.stringify({ model: settings.rewriteModel, messages: [{ role: 'user', content: 'Say ok' }], max_tokens: 5 }),
-            signal: AbortSignal.timeout(10000)
-        });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const data = await res.json();
-        if (!data.choices?.[0]?.message) throw new Error('Bad response format');
-        const modelName = (data.model || settings.rewriteModel);
-        status.textContent = `OK · ${modelName.length > 18 ? modelName.slice(0,18)+'…' : modelName}`;
-        status.className = 'slop-check-status slop-check-ok';
-    } catch (e) {
-        const msg = e.message || 'Error';
-        status.textContent = msg.length > 30 ? msg.slice(0, 30) + '…' : msg;
-        status.className = 'slop-check-status slop-check-err';
-    } finally {
-        btn.disabled = false;
-    }
-}
-
-function cosineSimilarity(vecA, vecB) {
-    let dot = 0, normA = 0, normB = 0;
-    for (let i = 0; i < vecA.length; i++) {
-        dot += vecA[i] * vecB[i];
-        normA += vecA[i] * vecA[i];
-        normB += vecB[i] * vecB[i];
-    }
-    if (normA === 0 || normB === 0) return 0;
-    return dot / (Math.sqrt(normA) * Math.sqrt(normB));
-}
-
-function averageVectors(vectors) {
-    const length = vectors[0].length;
-    const avgVec = new Array(length).fill(0);
-    for (let vec of vectors) for (let i = 0; i < length; i++) avgVec[i] += vec[i];
-    for (let i = 0; i < length; i++) avgVec[i] /= vectors.length;
-    return avgVec;
-}
-
-async function loadSlopDatabase() {
-    try {
-        const res = await fetch('/scripts/extensions/third-party/anti-slop/slop_db.json');
-        const db = await res.json();
-        let needsUpdate = false;
-        for (const cluster in db.clusters) {
-            if (!settings.cachedClusters[cluster]) { needsUpdate = true; break; }
-        }
-        if (needsUpdate) {
-            console.log("[Anti-Slop] Генерация векторов для базы клише...");
-            for (const [clusterName, phrases] of Object.entries(db.clusters)) {
-                if (!settings.cachedClusters[clusterName]) {
-                    const vectors = [];
-                    for (const phrase of phrases) {
-                        const vec = await fetchEmbedding(phrase);
-                        if (vec) vectors.push(vec);
-                    }
-                    if (vectors.length > 0) settings.cachedClusters[clusterName] = averageVectors(vectors);
-                }
+        for (const dbItem of dbEmbeddings) {
+            const sim = cosineSimilarity(sVector, dbItem.vector);
+            if (sim > highestSim) {
+                highestSim = sim;
+                matchedSlop = dbItem;
             }
-            saveSettings();
-            console.log("[Anti-Slop] Векторы успешно сохранены.");
         }
-    } catch (e) {
-        console.error("[Anti-Slop] Не удалось загрузить slop_db.json", e);
-    }
-}
 
-async function rewriteSentence(sentence) {
-    try {
-        const messages = [
-            { role: "system", content: "You are an expert novel editor. The user will provide a sentence that contains overused AI cliches (slop). Rewrite the sentence to remove the cliche, making it sound entirely natural, descriptive, and human-authored. Keep the original context and meaning. Output ONLY the rewritten sentence, nothing else." },
-            { role: "user", content: `Rewrite this sentence naturally: "${sentence}"` }
-        ];
-        const headers = { 'Content-Type': 'application/json' };
-        if (settings.rewriteKey) headers['Authorization'] = `Bearer ${settings.rewriteKey}`;
-        const res = await fetch(settings.rewriteUrl, {
-            method: 'POST', headers,
-            body: JSON.stringify({ model: settings.rewriteModel, messages, temperature: 0.7, max_tokens: 100 })
-        });
-        if (!res.ok) throw new Error(`Rewrite HTTP ${res.status}`);
-        const data = await res.json();
-        let rewritten = data.choices[0].message.content.trim();
-        return rewritten.replace(/^"|"$/g, '');
-    } catch (e) {
-        console.error("[Anti-Slop] Ошибка Rewrite API:", e);
-        return null;
-    }
-}
-
-function setupUI() {
-    $('body').append(`<div id="anti-slop-fab" title="Anti-Slop Settings">${ICONS.pencil}</div>`);
-
-    $('body').append(`
-        <div id="anti-slop-panel">
-            <div class="slop-header">
-                <div class="slop-header-left">
-                    <div class="slop-header-icon">${ICONS.spark}</div>
-                    <div class="slop-header-title">
-                        <span class="slop-title-main">Anti-Slop</span>
-                        <span class="slop-title-sub">Cliché Detection Engine</span>
-                    </div>
-                </div>
-                <div class="slop-header-right">
-                    <label class="slop-toggle" title="Enable / Disable">
-                        <input type="checkbox" id="slop-enable" ${settings.enabled ? 'checked' : ''}>
-                        <span class="slop-toggle-track"><span class="slop-toggle-thumb"></span></span>
-                    </label>
-                    <button class="slop-close-btn" id="slop-close-btn">${ICONS.close}</button>
-                </div>
-            </div>
-
-            <div class="slop-body">
-
-                <div class="slop-section">
-                    <div class="slop-section-label">Detection</div>
-                    <div class="slop-row">
-                        <div class="slop-setting-group slop-grow">
-                            <label>Action</label>
-                            <select class="slop-input" id="slop-mode">
-                                <option value="rewrite" ${settings.mode === 'rewrite' ? 'selected' : ''}>✦ Rewrite with LLM</option>
-                                <option value="delete" ${settings.mode === 'delete' ? 'selected' : ''}>✕ Delete Cliché</option>
-                            </select>
-                        </div>
-                        <div class="slop-setting-group slop-shrink">
-                            <label>Threshold</label>
-                            <input type="number" step="0.01" min="0" max="1" class="slop-input slop-input-sm" id="slop-threshold" value="${settings.threshold}">
-                        </div>
-                    </div>
-                </div>
-
-                <div class="slop-section">
-                    <div class="slop-section-label">Embedding Model</div>
-                    <div class="slop-setting-group">
-                        <label>API URL</label>
-                        <input type="text" class="slop-input" id="slop-embed-url" value="${settings.embedUrl}" placeholder="http://127.0.0.1:11434/api/embeddings">
-                    </div>
-                    <div class="slop-row">
-                        <div class="slop-setting-group slop-grow">
-                            <label>Model Name</label>
-                            <input type="text" class="slop-input" id="slop-embed-model" value="${settings.embedModel}" placeholder="nomic-embed-text">
-                        </div>
-                        <div class="slop-setting-group slop-grow">
-                            <label>API Key <span class="slop-optional">(optional)</span></label>
-                            <input type="password" class="slop-input" id="slop-embed-key" value="${settings.embedKey}" placeholder="sk-...">
-                        </div>
-                    </div>
-                    <div class="slop-check-row">
-                        <button class="slop-check-btn" id="slop-embed-check-btn">${ICONS.check} Check Connection</button>
-                        <span class="slop-check-status" id="slop-embed-check-status"></span>
-                    </div>
-                </div>
-
-                <div class="slop-section">
-                    <div class="slop-section-label">Rewrite Model</div>
-                    <div class="slop-setting-group">
-                        <label>API URL <span class="slop-hint">(v1/chat/completions)</span></label>
-                        <input type="text" class="slop-input" id="slop-rewrite-url" value="${settings.rewriteUrl}" placeholder="http://127.0.0.1:11434/v1/chat/completions">
-                    </div>
-                    <div class="slop-row">
-                        <div class="slop-setting-group slop-grow">
-                            <label>Model Name</label>
-                            <input type="text" class="slop-input" id="slop-rewrite-model" value="${settings.rewriteModel}" placeholder="llama3">
-                        </div>
-                        <div class="slop-setting-group slop-grow">
-                            <label>API Key <span class="slop-optional">(optional)</span></label>
-                            <input type="password" class="slop-input" id="slop-rewrite-key" value="${settings.rewriteKey}" placeholder="sk-...">
-                        </div>
-                    </div>
-                    <div class="slop-check-row">
-                        <button class="slop-check-btn" id="slop-rewrite-check-btn">${ICONS.check} Check Connection</button>
-                        <span class="slop-check-status" id="slop-rewrite-check-status"></span>
-                    </div>
-                </div>
-
-                <div class="slop-section">
-                    <div class="slop-section-label slop-section-label-row">
-                        <span>${ICONS.historyIcon} Recent Fixes</span>
-                        <button class="slop-clear-history-btn" id="slop-clear-history-btn" title="Очистить историю">✕</button>
-                    </div>
-                    <div id="slop-history-list"></div>
-                </div>
-
-                <button class="slop-btn" id="slop-recalc-btn">
-                    <span class="slop-btn-icon">⟳</span> Rebuild Database Cache
-                </button>
-            </div>
-        </div>
-    `);
-
-    $('#slop-close-btn').on('click', () => {
-        $('#anti-slop-panel').removeClass('visible');
-        $('#anti-slop-fab').removeClass('active');
-    });
-
-    $('.slop-input, #slop-enable').on('change input', () => {
-        settings.enabled      = $('#slop-enable').is(':checked');
-        settings.mode         = $('#slop-mode').val();
-        settings.threshold    = parseFloat($('#slop-threshold').val());
-        settings.embedUrl     = $('#slop-embed-url').val();
-        settings.embedModel   = $('#slop-embed-model').val();
-        settings.embedKey     = $('#slop-embed-key').val();
-        settings.rewriteUrl   = $('#slop-rewrite-url').val();
-        settings.rewriteModel = $('#slop-rewrite-model').val();
-        settings.rewriteKey   = $('#slop-rewrite-key').val();
-        saveSettings();
-    });
-
-    $('#slop-recalc-btn').on('click', async () => {
-        settings.cachedClusters = {};
-        $('#slop-recalc-btn').html('<span class="slop-btn-icon">⟳</span> Building…').prop('disabled', true);
-        await loadSlopDatabase();
-        $('#slop-recalc-btn').html('<span class="slop-btn-icon">⟳</span> Rebuild Database Cache').prop('disabled', false);
-    });
-
-    $('#slop-embed-check-btn').on('click', checkEmbedConnection);
-    $('#slop-rewrite-check-btn').on('click', checkRewriteConnection);
-
-    $('#slop-clear-history-btn').on('click', () => {
-        settings.rewriteHistory = [];
-        saveSettings();
-        renderHistory();
-    });
-
-    renderHistory();
-
-    setupDrag($('#anti-slop-fab'), () => {
-        const isOpen = $('#anti-slop-panel').hasClass('visible');
-        $('#anti-slop-panel').toggleClass('visible', !isOpen);
-        $('#anti-slop-fab').toggleClass('active', !isOpen);
-        if (!isOpen) {
-            $('#anti-slop-fab').html(ICONS.pencilActive);
-            renderHistory();
-        } else {
-            $('#anti-slop-fab').html(ICONS.pencil);
+        // Если нашли клише (сходство выше порога)
+        if (highestSim >= settings.threshold && matchedSlop) {
+            slopFound = true;
+            console.log(`[Anti-Slop] Переписываем (${Math.round(highestSim*100)}% совпадения): "${matchedSlop.phrase}"`);
+            
+            // Запрашиваем переписывание у LLM
+            const rewrittenSentence = await rewriteSentence(sentenceText, matchedSlop.phrase);
+            
+            if (rewrittenSentence && rewrittenSentence !== sentenceText) {
+                // Заменяем точное совпадение старого предложения на новое
+                modifiedText = modifiedText.replace(sentenceText, rewrittenSentence);
+                addHistoryItem(sentenceText, rewrittenSentence, highestSim, matchedSlop.cluster);
+            }
         }
-    });
-}
-
-function setupDrag($fab, onTap) {
-    let dragging = false, dragMoved = false;
-    let startX = 0, startY = 0, startLeft = 0, startTop = 0;
-    const THRESHOLD = 6;
-    const fabEl = $fab[0];
-
-    function getXY(e) {
-        if (e.touches && e.touches[0]) return { x: e.touches[0].clientX, y: e.touches[0].clientY };
-        if (e.changedTouches && e.changedTouches[0]) return { x: e.changedTouches[0].clientX, y: e.changedTouches[0].clientY };
-        return { x: e.clientX, y: e.clientY };
     }
 
-    fabEl.addEventListener('touchstart', function(e) {
-        dragging = true; dragMoved = false;
-        const c = getXY(e);
-        startX = c.x; startY = c.y;
-        const rect = fabEl.getBoundingClientRect();
-        startLeft = rect.left; startTop = rect.top;
-        $fab.css({ left: startLeft + 'px', top: startTop + 'px', right: 'auto', bottom: 'auto' });
-    }, { passive: true });
+    // Если текст был изменен, обновляем сообщение в ST
+    if (slopFound && modifiedText !== originalText) {
+        const iconHtml = `<span class="anti-slop-edited-icon" title="Fixed AI Cliché (Slop)">✏️</span>`;
+        message.mes = modifiedText + iconHtml;
 
-    // passive: false — чтобы preventDefault блокировал скролл страницы при перетаскивании
-    fabEl.addEventListener('touchmove', function(e) {
-        if (!dragging) return;
-        const c = getXY(e);
-        const dx = c.x - startX, dy = c.y - startY;
-        if (Math.abs(dx) > THRESHOLD || Math.abs(dy) > THRESHOLD) {
-            dragMoved = true;
-            e.preventDefault();
-        }
-        if (!dragMoved) return;
-        const w = fabEl.offsetWidth, h = fabEl.offsetHeight;
-        const nx = Math.max(0, Math.min(startLeft + dx, window.innerWidth - w));
-        const ny = Math.max(0, Math.min(startTop + dy, window.innerHeight - h));
-        $fab.css({ left: nx + 'px', top: ny + 'px' });
-    }, { passive: false });
-
-    fabEl.addEventListener('touchend', function(e) {
-        if (!dragging) return;
-        dragging = false;
-        if (!dragMoved) { e.preventDefault(); onTap(); }
-        else {
-            const rect = fabEl.getBoundingClientRect();
-            saveSlopPosition(Math.round(rect.left), Math.round(rect.top));
-        }
-        dragMoved = false;
-    }, { passive: false });
-
-    $fab.on('mousedown', function(e) {
-        dragging = true; dragMoved = false;
-        startX = e.clientX; startY = e.clientY;
-        const rect = fabEl.getBoundingClientRect();
-        startLeft = rect.left; startTop = rect.top;
-        $fab.css({ left: startLeft + 'px', top: startTop + 'px', right: 'auto', bottom: 'auto' });
-        e.preventDefault();
-    });
-
-    $(document).on('mousemove.slopfab', function(e) {
-        if (!dragging) return;
-        const dx = e.clientX - startX, dy = e.clientY - startY;
-        if (Math.abs(dx) > THRESHOLD || Math.abs(dy) > THRESHOLD) dragMoved = true;
-        if (!dragMoved) return;
-        const w = fabEl.offsetWidth, h = fabEl.offsetHeight;
-        const nx = Math.max(0, Math.min(startLeft + dx, window.innerWidth - w));
-        const ny = Math.max(0, Math.min(startTop + dy, window.innerHeight - h));
-        $fab.css({ left: nx + 'px', top: ny + 'px' });
-    });
-
-    $(document).on('mouseup.slopfab', function() {
-        if (!dragging) return;
-        dragging = false;
-        if (dragMoved) {
-            const rect = fabEl.getBoundingClientRect();
-            saveSlopPosition(Math.round(rect.left), Math.round(rect.top));
-        } else { onTap(); }
-        dragMoved = false;
-    });
-
-    const vw = window.innerWidth, vh = window.innerHeight;
-    if (settings.fab_x >= 0 && settings.fab_y >= 0 && settings.fab_x < vw - 10 && settings.fab_y < vh - 10) {
-        $fab.css({ left: settings.fab_x + 'px', top: settings.fab_y + 'px', right: 'auto', bottom: 'auto' });
-    } else {
-        $fab.css({ top: '170px', right: '15px', left: 'auto', bottom: 'auto' });
+        updateMessageBlock(mesId, message);
+        context.saveChat();
     }
+
+    fab.classList.remove('processing');
 }
 
-function saveSlopPosition(x, y) { settings.fab_x = x; settings.fab_y = y; saveSettings(); }
-function saveSettings() { extension_settings[EXT_NAME] = settings; saveSettingsDebounced(); }
-function setFabState(state) {
-    if (state === 'processing') $('#anti-slop-fab').addClass('processing');
-    else $('#anti-slop-fab').removeClass('processing');
-}
+// Инициализация
+jQuery(async () => {
+    console.log("[Anti-Slop] Запуск (Embedding + LLM Rewrite)...");
+    
+    createUI();
+    await initDatabaseAndCacheEmbeddings();
 
-jQuery(async () => { await init(); });
+    eventSource.on(event_types.MESSAGE_RECEIVED, async (mesId) => {
+        await processIncomingMessage(mesId);
+    });
+});
