@@ -1,0 +1,434 @@
+:root {
+    --slop-void:         #09090f;
+    --slop-deep:         #111118;
+    --slop-surface:      #18181f;
+    --slop-surface-2:    #1f1f28;
+    --slop-border:       rgba(176, 125, 249, 0.12);
+    --slop-border-soft:  rgba(255, 255, 255, 0.06);
+    --slop-text-primary: #edeaf5;
+    --slop-text-muted:   #635e74;
+    --slop-text-sub:     #9b94b0;
+    --slop-accent:       #b07df9;
+    --slop-accent-dim:   #7a51b5;
+    --slop-accent-glow:  rgba(176, 125, 249, 0.15);
+    --slop-accent-glow2: rgba(176, 125, 249, 0.08);
+    --slop-warn:         #f5c27a;
+    --slop-ok:           #6ee7b7;
+    --slop-err:          #f87171;
+    --slop-radius:       12px;
+    --slop-radius-sm:    8px;
+    --slop-transition:   0.25s cubic-bezier(.4,0,.2,1);
+}
+
+/* ── FAB Button ─────────────────────────────────────────── */
+
+#anti-slop-fab {
+    position: fixed !important;
+    z-index: 99998 !important;
+    top: 170px;
+    right: 15px;
+    width: 38px;
+    height: 38px;
+    display: flex !important;
+    align-items: center;
+    justify-content: center;
+    cursor: grab;
+    background: transparent;
+    border: none;
+    border-radius: 50%;
+    padding: 0;
+    transition: var(--slop-transition);
+    user-select: none;
+    -webkit-user-select: none;
+    touch-action: none; /* важно для корректного drag на мобильных */
+}
+
+#anti-slop-fab svg {
+    width: 26px;
+    height: 26px;
+    transition: var(--slop-transition);
+    filter: drop-shadow(0 1px 3px rgba(0,0,0,0.4));
+}
+
+#anti-slop-fab:hover svg {
+    transform: scale(1.15);
+    filter: drop-shadow(0 0 8px rgba(176, 125, 249, 0.45));
+}
+
+#anti-slop-fab:active { cursor: grabbing; }
+
+#anti-slop-fab.active svg {
+    filter: drop-shadow(0 0 12px rgba(176, 125, 249, 0.7));
+}
+
+#anti-slop-fab.processing svg {
+    animation: slop-spin 1.8s linear infinite;
+    filter: drop-shadow(0 0 8px rgba(245, 194, 122, 0.6));
+}
+
+@keyframes slop-spin { 100% { transform: rotate(360deg); } }
+
+/* ── Panel ──────────────────────────────────────────────── */
+
+#anti-slop-panel {
+    display: none;
+    flex-direction: column;
+    position: fixed;
+    z-index: 99999;
+    top: 50px;
+    right: 15px;
+    width: 360px;
+    background: var(--slop-void);
+    border: 1px solid var(--slop-border);
+    border-radius: var(--slop-radius);
+    box-shadow:
+        0 0 0 1px rgba(176,125,249,0.05),
+        0 12px 40px rgba(0, 0, 0, 0.7),
+        0 0 80px rgba(176, 125, 249, 0.04);
+    color: var(--slop-text-primary);
+    font-family: 'Outfit', 'Inter', system-ui, sans-serif;
+    overflow: hidden;
+    animation: slop-panel-in var(--slop-transition) both;
+}
+
+#anti-slop-panel.visible { display: flex; }
+
+@keyframes slop-panel-in {
+    from { opacity: 0; transform: translateY(-8px) scale(0.98); }
+    to   { opacity: 1; transform: translateY(0)   scale(1); }
+}
+
+/* ── Header ─────────────────────────────────────────────── */
+
+.slop-header {
+    padding: 14px 16px;
+    background: linear-gradient(135deg, rgba(176,125,249,0.08) 0%, transparent 60%);
+    border-bottom: 1px solid var(--slop-border-soft);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 10px;
+}
+
+.slop-header-left  { display: flex; align-items: center; gap: 10px; }
+.slop-header-right { display: flex; align-items: center; gap: 8px; }
+
+.slop-header-icon {
+    width: 30px; height: 30px;
+    border-radius: 8px;
+    background: var(--slop-accent-glow);
+    border: 1px solid var(--slop-border);
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+}
+
+.slop-header-icon svg { width: 16px; height: 16px; color: var(--slop-accent); }
+
+.slop-header-title { display: flex; flex-direction: column; line-height: 1.2; }
+
+.slop-title-main {
+    font-size: 13px; font-weight: 700;
+    color: var(--slop-accent); letter-spacing: 0.5px;
+}
+.slop-title-sub {
+    font-size: 10px; color: var(--slop-text-muted);
+    text-transform: uppercase; letter-spacing: 1px; margin-top: 1px;
+}
+
+/* ── Toggle ─────────────────────────────────────────────── */
+
+.slop-toggle { position: relative; cursor: pointer; display: flex; align-items: center; }
+.slop-toggle input { display: none; }
+
+.slop-toggle-track {
+    width: 34px; height: 18px;
+    background: var(--slop-surface-2);
+    border: 1px solid var(--slop-border-soft);
+    border-radius: 999px;
+    transition: var(--slop-transition);
+    position: relative; display: flex; align-items: center;
+}
+
+.slop-toggle input:checked ~ .slop-toggle-track {
+    background: var(--slop-accent-glow);
+    border-color: var(--slop-accent-dim);
+}
+
+.slop-toggle-thumb {
+    position: absolute; left: 2px;
+    width: 12px; height: 12px;
+    border-radius: 50%;
+    background: var(--slop-text-muted);
+    transition: var(--slop-transition);
+    box-shadow: 0 1px 3px rgba(0,0,0,0.4);
+}
+
+.slop-toggle input:checked ~ .slop-toggle-track .slop-toggle-thumb {
+    left: 18px;
+    background: var(--slop-accent);
+    box-shadow: 0 0 6px rgba(176,125,249,0.5);
+}
+
+/* ── Close ──────────────────────────────────────────────── */
+
+.slop-close-btn {
+    width: 26px; height: 26px;
+    background: transparent;
+    border: 1px solid var(--slop-border-soft);
+    border-radius: 6px;
+    color: var(--slop-text-muted);
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer; padding: 0;
+    transition: var(--slop-transition); flex-shrink: 0;
+}
+.slop-close-btn svg { width: 13px; height: 13px; }
+.slop-close-btn:hover {
+    background: rgba(255,255,255,0.06);
+    color: var(--slop-text-primary);
+    border-color: rgba(255,255,255,0.12);
+}
+
+/* ── Body ───────────────────────────────────────────────── */
+
+.slop-body {
+    padding: 14px;
+    max-height: 65vh;
+    overflow-y: auto;
+    display: flex; flex-direction: column; gap: 10px;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(176,125,249,0.2) transparent;
+}
+.slop-body::-webkit-scrollbar { width: 4px; }
+.slop-body::-webkit-scrollbar-track { background: transparent; }
+.slop-body::-webkit-scrollbar-thumb { background: rgba(176,125,249,0.25); border-radius: 2px; }
+
+/* ── Section ────────────────────────────────────────────── */
+
+.slop-section {
+    background: var(--slop-surface);
+    border: 1px solid var(--slop-border-soft);
+    border-radius: var(--slop-radius-sm);
+    padding: 12px;
+    display: flex; flex-direction: column; gap: 10px;
+}
+
+.slop-section-label {
+    font-size: 10px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 1.2px;
+    color: var(--slop-accent); opacity: 0.8;
+    padding-bottom: 4px;
+    border-bottom: 1px solid var(--slop-border-soft);
+    display: flex; align-items: center; gap: 5px;
+}
+
+.slop-section-label-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.slop-clear-history-btn {
+    background: transparent;
+    border: none;
+    color: var(--slop-text-muted);
+    cursor: pointer;
+    font-size: 10px;
+    padding: 0 2px;
+    line-height: 1;
+    transition: var(--slop-transition);
+    opacity: 0.6;
+}
+.slop-clear-history-btn:hover { opacity: 1; color: var(--slop-err); }
+
+/* ── Row ────────────────────────────────────────────────── */
+
+.slop-row  { display: flex; gap: 10px; }
+.slop-grow  { flex: 1 1 0; min-width: 0; }
+.slop-shrink{ flex: 0 0 80px; }
+
+/* ── Setting Group ──────────────────────────────────────── */
+
+.slop-setting-group { display: flex; flex-direction: column; gap: 5px; }
+.slop-setting-group label {
+    font-size: 10px; font-weight: 500;
+    text-transform: uppercase; color: var(--slop-text-muted);
+    letter-spacing: 0.8px;
+    display: flex; align-items: center; gap: 4px;
+}
+.slop-optional {
+    font-size: 9px; color: var(--slop-text-muted);
+    text-transform: none; letter-spacing: 0; opacity: 0.6; font-weight: 400;
+}
+.slop-hint {
+    font-size: 9px; color: var(--slop-text-muted);
+    opacity: 0.5; font-weight: 400; text-transform: none; letter-spacing: 0;
+}
+
+/* ── Inputs ─────────────────────────────────────────────── */
+
+.slop-input {
+    background: var(--slop-deep);
+    border: 1px solid var(--slop-border-soft);
+    color: var(--slop-text-primary);
+    padding: 7px 9px;
+    border-radius: var(--slop-radius-sm);
+    font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
+    font-size: 11.5px;
+    transition: var(--slop-transition);
+    width: 100%; box-sizing: border-box;
+    outline: none; appearance: none; -webkit-appearance: none;
+}
+.slop-input:focus {
+    border-color: var(--slop-accent-dim);
+    background: var(--slop-surface);
+    box-shadow: 0 0 0 2px var(--slop-accent-glow2);
+}
+.slop-input-sm { text-align: center; }
+.slop-input option { background: var(--slop-deep); color: var(--slop-text-primary); }
+
+/* ── Check Connection ───────────────────────────────────── */
+
+.slop-check-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 2px;
+}
+
+.slop-check-btn {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    background: var(--slop-deep);
+    border: 1px solid var(--slop-border-soft);
+    color: var(--slop-text-sub);
+    padding: 5px 10px;
+    border-radius: var(--slop-radius-sm);
+    cursor: pointer;
+    font-size: 10.5px;
+    font-weight: 500;
+    letter-spacing: 0.4px;
+    font-family: inherit;
+    transition: var(--slop-transition);
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+
+.slop-check-btn:hover:not(:disabled) {
+    background: var(--slop-surface-2);
+    border-color: rgba(255,255,255,0.12);
+    color: var(--slop-text-primary);
+}
+
+.slop-check-btn:disabled {
+    opacity: 0.5; cursor: not-allowed;
+}
+
+.slop-check-status {
+    font-size: 10px;
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    letter-spacing: 0.2px;
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    transition: var(--slop-transition);
+}
+
+.slop-check-pending { color: var(--slop-text-muted); }
+.slop-check-ok      { color: var(--slop-ok); }
+.slop-check-err     { color: var(--slop-err); }
+
+/* ── Rebuild Button ─────────────────────────────────────── */
+
+.slop-btn {
+    background: var(--slop-accent-glow2);
+    border: 1px solid var(--slop-border);
+    color: var(--slop-accent);
+    padding: 9px 14px;
+    border-radius: var(--slop-radius-sm);
+    cursor: pointer;
+    text-transform: uppercase;
+    font-size: 11px; font-weight: 600; letter-spacing: 0.8px;
+    font-family: inherit;
+    display: flex; align-items: center; justify-content: center; gap: 6px;
+    transition: var(--slop-transition); width: 100%;
+}
+.slop-btn:hover:not(:disabled) {
+    background: var(--slop-accent-glow);
+    border-color: var(--slop-accent-dim);
+    box-shadow: 0 0 12px var(--slop-accent-glow);
+}
+.slop-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.slop-btn-icon { font-size: 14px; line-height: 1; }
+
+/* ── History ────────────────────────────────────────────── */
+
+#slop-history-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.slop-history-empty {
+    font-size: 11px;
+    color: var(--slop-text-muted);
+    text-align: center;
+    padding: 10px 0 4px;
+    opacity: 0.6;
+}
+
+.slop-history-item {
+    background: var(--slop-deep);
+    border: 1px solid var(--slop-border-soft);
+    border-radius: var(--slop-radius-sm);
+    padding: 8px 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.slop-history-meta {
+    font-size: 9px;
+    color: var(--slop-text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    opacity: 0.6;
+}
+
+.slop-history-original {
+    font-size: 10.5px;
+    color: var(--slop-err);
+    opacity: 0.85;
+    line-height: 1.4;
+    font-style: italic;
+}
+
+.slop-history-arrow {
+    font-size: 10px;
+    color: var(--slop-text-muted);
+    opacity: 0.5;
+    line-height: 1;
+}
+
+.slop-history-rewritten {
+    font-size: 10.5px;
+    color: var(--slop-ok);
+    opacity: 0.9;
+    line-height: 1.4;
+}
+
+/* ── Chat inline icon ───────────────────────────────────── */
+
+.anti-slop-edited-icon {
+    display: inline-flex;
+    align-items: center;
+    margin-left: 4px;
+    opacity: 0.55;
+    cursor: help;
+    vertical-align: middle;
+    transition: var(--slop-transition);
+}
+
+.anti-slop-edited-icon:hover { opacity: 1; }

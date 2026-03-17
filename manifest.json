@@ -1,0 +1,12 @@
+{
+    "display_name": "Anti-Slop Engine",
+    "loading_order": 101,
+    "requires": [],
+    "optional": [],
+    "js": "index.js",
+    "css": "style.css",
+    "author": "Custom",
+    "version": "1.0.0",
+    "description": "Автоматическое обнаружение и переписывание AI-клише (slop) с использованием Embedding similarity.",
+    "auto_update": false
+}
